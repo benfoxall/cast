@@ -1,0 +1,19 @@
+{
+  "name": "cast",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-31",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CAST_SESSION",
+        "class_name": "CastSession",
+        "script_name": "cast",
+      },
+    ],
+  },
+  // Add your Cloudflare Calls App ID and Secret here
+  "vars": {
+    "CALLS_APP_ID": "your-app-id-here",
+    "CALLS_APP_SECRET": "your-app-secret-here",
+  },
+}
