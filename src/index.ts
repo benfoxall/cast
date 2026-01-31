@@ -203,6 +203,45 @@ function getCastPageHTML(
         
         updateStatus("Requesting screen access...");
         
+        // Stop existing tracks if any and notify server
+        if (localStream) {
+          const oldVideoTrack = localStream.getVideoTracks()[0];
+          if (oldVideoTrack) {
+            const oldTrackName = oldVideoTrack.id;
+            console.log("Removing old track:", oldTrackName);
+            
+            // Notify server to remove old track from list
+            try {
+              await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/remove-track\`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "Authorization": \`Bearer \${CASTER_TOKEN}\`
+                },
+                body: JSON.stringify({ trackName: oldTrackName })
+              });
+            } catch (e) {
+              console.warn("Failed to remove old track:", e);
+            }
+          }
+          
+          localStream.getTracks().forEach(track => {
+            track.stop();
+            console.log("Stopped existing track:", track.id);
+          });
+        }
+        
+        // Remove existing senders from peer connection
+        if (pc) {
+          const senders = pc.getSenders();
+          for (const sender of senders) {
+            if (sender.track) {
+              pc.removeTrack(sender);
+              console.log("Removed sender for track:", sender.track.id);
+            }
+          }
+        }
+        
         // Get display media
         localStream = await navigator.mediaDevices.getDisplayMedia({
           video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
@@ -348,12 +387,29 @@ function getViewPageHTML(sessionId: string, origin: string): string {
       left: 50%;
       transform: translate(-50%, -50%);
       text-align: center;
+      z-index: 10;
+    }
+    #videos {
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 0;
+    }
+    #videos video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: black;
+    }
+    #videos:has(video:only-child) {
+      grid-template-columns: 1fr;
     }
   </style>
 </head>
 <body>
   <div id="waiting">Waiting for stream...</div>
-  <video id="remoteVideo" autoplay muted playsinline style="display: none;"></video>
+  <div id="videos"></div>
 
   <script>
     const SESSION_ID = "${sessionId}";
@@ -361,17 +417,43 @@ function getViewPageHTML(sessionId: string, origin: string): string {
     
     let pc = null;
     let callsSessionId = null;
-    let trackName = null;
+    let viewerSessionId = null;
+    const activeTrackNames = new Set();
+    const trackVideoMap = new Map(); // trackName -> video element
     
     async function checkSession() {
       try {
         const response = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/info\`);
         const data = await response.json();
         
-        if (data.ready && data.callsSessionId && data.trackName) {
+        if (data.ready && data.callsSessionId) {
           callsSessionId = data.callsSessionId;
-          trackName = data.trackName;
-          await connectToStream();
+          
+          // Initialize connection if not already done
+          if (!pc) {
+            await initConnection();
+          }
+          
+          if (data.trackNames && data.trackNames.length > 0) {
+            // Pull any new tracks
+            const newTracks = data.trackNames.filter(tn => !activeTrackNames.has(tn));
+            for (const trackName of newTracks) {
+              await pullTrack(trackName);
+              activeTrackNames.add(trackName);
+            }
+            
+            // Remove tracks that are no longer in the list
+            const removedTracks = Array.from(activeTrackNames).filter(tn => !data.trackNames.includes(tn));
+            for (const trackName of removedTracks) {
+              console.log("Track removed from session:", trackName);
+              activeTrackNames.delete(trackName);
+            }
+            
+            document.getElementById("waiting").style.display = "none";
+          }
+          
+          // Keep checking for new tracks
+          setTimeout(checkSession, 2000);
         } else {
           setTimeout(checkSession, 2000);
         }
@@ -381,48 +463,75 @@ function getViewPageHTML(sessionId: string, origin: string): string {
       }
     }
 
-    async function connectToStream() {
-      try {
-        // Create peer connection first
-        pc = new RTCPeerConnection({
-          iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
-          bundlePolicy: "max-bundle"
-        });
+    async function initConnection() {
+      // Create peer connection
+      pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.cloudflare.com:3478" }],
+        bundlePolicy: "max-bundle"
+      });
+      
+      // Debug connection state
+      pc.onconnectionstatechange = () => {
+        console.log("Connection state:", pc.connectionState);
+      };
+      
+      pc.oniceconnectionstatechange = () => {
+        console.log("ICE connection state:", pc.iceConnectionState);
+      };
+      
+      // Handle incoming tracks - create video element for each
+      pc.ontrack = (event) => {
+        console.log("Received track:", event.track.kind, "id:", event.track.id);
         
-        // Debug connection state
-        pc.onconnectionstatechange = () => {
-          console.log("Connection state:", pc.connectionState);
-        };
+        // Create or get video element for this track
+        let video = trackVideoMap.get(event.track.id);
+        if (!video) {
+          video = document.createElement("video");
+          video.autoplay = true;
+          video.muted = true;
+          video.playsinline = true;
+          video.dataset.trackId = event.track.id;
+          document.getElementById("videos").appendChild(video);
+          trackVideoMap.set(event.track.id, video);
+          console.log("Created video element for track:", event.track.id);
+        }
         
-        pc.oniceconnectionstatechange = () => {
-          console.log("ICE connection state:", pc.iceConnectionState);
-        };
+        // Set stream
+        if (event.streams && event.streams[0]) {
+          video.srcObject = event.streams[0];
+        } else {
+          const stream = new MediaStream([event.track]);
+          video.srcObject = stream;
+        }
         
-        // Handle incoming tracks
-        pc.ontrack = (event) => {
-          console.log("Received track:", event.track.kind);
-          const video = document.getElementById("remoteVideo");
-          
-          if (event.streams && event.streams[0]) {
-            video.srcObject = event.streams[0];
-          } else {
-            const stream = new MediaStream([event.track]);
-            video.srcObject = stream;
+        // Handle track ending
+        event.track.onended = () => {
+          console.log("Track ended:", event.track.id);
+          const videoEl = trackVideoMap.get(event.track.id);
+          if (videoEl) {
+            videoEl.remove();
+            trackVideoMap.delete(event.track.id);
           }
-          
-          document.getElementById("waiting").style.display = "none";
-          video.style.display = "block";
         };
         
-        // Create new session for viewing via proxy
-        const newSessionResponse = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/new-session\`, {
-          method: "POST"
-        });
-        
-        if (!newSessionResponse.ok) throw new Error("Failed to create viewer session");
-        
-        const newSessionData = await newSessionResponse.json();
-        const viewerSessionId = newSessionData.sessionId;
+        document.getElementById("waiting").style.display = "none";
+      };
+      
+      // Create viewer session
+      const newSessionResponse = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/new-session\`, {
+        method: "POST"
+      });
+      
+      if (!newSessionResponse.ok) throw new Error("Failed to create viewer session");
+      
+      const newSessionData = await newSessionResponse.json();
+      viewerSessionId = newSessionData.sessionId;
+      console.log("Created viewer session:", viewerSessionId);
+    }
+
+    async function pullTrack(trackName) {
+      try {
+        console.log("Pulling track:", trackName);
         
         // Retry pulling tracks if not found (caster might not be sending yet)
         let retries = 0;
@@ -430,7 +539,6 @@ function getViewPageHTML(sessionId: string, origin: string): string {
         let pullData;
         
         while (retries < maxRetries) {
-          // Pull tracks from caster session
           const pullResponse = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/pull-tracks\`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -443,62 +551,41 @@ function getViewPageHTML(sessionId: string, origin: string): string {
           if (!pullResponse.ok) throw new Error("Failed to pull tracks");
           
           pullData = await pullResponse.json();
-          console.log("Pull tracks response (attempt " + (retries + 1) + "):", pullData);
+          console.log("Pull tracks response for " + trackName + " (attempt " + (retries + 1) + "):", pullData);
           
           // Check if tracks have errors
           const hasError = pullData.tracks && pullData.tracks.some(t => t.errorCode);
           
           if (hasError) {
-            console.log("Track not ready yet, retrying in 1 second...");
+            const trackErrors = pullData.tracks.filter(t => t.errorCode).map(t => ({
+              trackName: t.trackName,
+              errorCode: t.errorCode,
+              errorDescription: t.errorDescription
+            }));
+            console.log("Track errors:", trackErrors);
             retries++;
             if (retries < maxRetries) {
               await new Promise(resolve => setTimeout(resolve, 1000));
               continue;
             } else {
-              throw new Error("Track not found after " + maxRetries + " attempts");
+              console.error("Track not found after " + maxRetries + " attempts");
+              return;
             }
           }
           
           break;
         }
         
-        console.log("Tracks in response:", pullData.tracks);
-        
-        // Log each track in detail
-        if (pullData.tracks && pullData.tracks.length > 0) {
-          pullData.tracks.forEach((track, index) => {
-            console.log(\`Track \${index}:\`, track);
-          });
-        }
-        
-        console.log("Remote SDP offer:", pullData.sessionDescription);
-        
         // The pull response includes the offer with tracks
         if (pullData.sessionDescription && pullData.sessionDescription.type) {
-          console.log("Setting remote description...");
+          console.log("Setting remote description for track:", trackName);
           await pc.setRemoteDescription(pullData.sessionDescription);
-          
-          console.log("Transceivers after setRemoteDescription:", pc.getTransceivers().map(t => {
-            return {
-              mid: t.mid,
-              direction: t.direction,
-              currentDirection: t.currentDirection,
-              receiver: {
-                track: t.receiver.track ? {
-                  id: t.receiver.track.id,
-                  kind: t.receiver.track.kind,
-                  readyState: t.receiver.track.readyState
-                } : null
-              }
-            };
-          }));
           
           // Create and set answer
           const answer = await pc.createAnswer();
-          console.log("Created answer:", answer);
           await pc.setLocalDescription(answer);
           
-          console.log("Sending answer to Calls via viewer-renegotiate...");
+          console.log("Sending answer to Calls for track:", trackName);
           
           // Send answer back
           const renegResponse = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/viewer-renegotiate\`, {
@@ -519,35 +606,29 @@ function getViewPageHTML(sessionId: string, origin: string): string {
             throw new Error("Failed to send answer: " + errorText);
           }
           
-          const renegData = await renegResponse.json();
-          console.log("Viewer renegotiate response:", renegData);
-          
-          // Check viewer Calls session state
-          const viewerStateResponse = await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/viewer-calls-state\`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ viewerSessionId })
-          });
-          const viewerCallsState = await viewerStateResponse.json();
-          console.log("Cloudflare Calls session state (viewer):", viewerCallsState);
-          
-          document.getElementById("waiting").textContent = "Waiting for stream...";
-        } else {
-          throw new Error("No session description from pull-tracks");
+          console.log("Successfully pulled track:", trackName);
         }
-        
       } catch (error) {
-        console.error("Error connecting to stream:", error);
-        document.getElementById("waiting").textContent = "Error connecting: " + error.message;
+        console.error("Error pulling track " + trackName + ":", error);
       }
     }
 
     // Click to fullscreen
     document.body.addEventListener("click", () => {
-      const video = document.getElementById("remoteVideo");
-      if (video.requestFullscreen) {
-        video.requestFullscreen();
-      } else if (video.webkitRequestFullscreen) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else if (document.body.requestFullscreen) {
+        document.body.requestFullscreen();
+      } else if (document.body.webkitRequestFullscreen) {
+        document.body.webkitRequestFullscreen();
+      }
+    });
+
+    checkSession();
+  </script>
+</body>
+</html>\`;
+}
         video.webkitRequestFullscreen();
       }
     });
