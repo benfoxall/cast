@@ -21,21 +21,23 @@ npm install
 
 ## Step 3: Configure Environment
 
-Edit `wrangler.jsonc` and replace the placeholder values:
-
-```jsonc
-{
-  // ... other config
-  "vars": {
-    "CALLS_APP_ID": "your-actual-app-id-here",
-    "CALLS_APP_SECRET": "your-actual-app-secret-here",
-  },
-}
-```
-
-**Important:** Do NOT commit your secrets to version control. For production, use `wrangler secret` instead:
+Create a `.dev.vars` file in the project root with your Calls credentials:
 
 ```bash
+CALLS_APP_ID=your-actual-app-id-here
+CALLS_APP_SECRET=your-actual-app-secret-here
+```
+
+You can copy `.dev.vars.example` as a template:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+**Important:** `.dev.vars` is git-ignored and should NOT be committed. For production deployment, use `wrangler secret`:
+
+```bash
+wrangler secret put CALLS_APP_ID
 wrangler secret put CALLS_APP_SECRET
 ```
 
@@ -131,7 +133,7 @@ To use a custom domain like `cast.benjaminbenben.com`:
 
 ## Production Checklist
 
-- [ ] Move secrets to `wrangler secret` instead of `wrangler.jsonc`
+- [ ] Use `wrangler secret` for production credentials (not `.dev.vars`)
 - [ ] Set up custom domain
 - [ ] Configure CORS if needed
 - [ ] Set up monitoring/alerts

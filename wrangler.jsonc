@@ -2,6 +2,12 @@
   "name": "cast",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-31",
+  "routes": [
+    {
+      "pattern": "cast.benjaminbenben.com/*",
+      "zone_name": "benjaminbenben.com",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -10,5 +16,5 @@
         "script_name": "cast",
       },
     ],
-  }
+  },
 }
