@@ -201,30 +201,21 @@ function getCastPageHTML(
           await initCallsSession();
         }
         
+        // Disable button during operation
+        document.getElementById("addScreenBtn").disabled = true;
+        
         updateStatus("Requesting screen access...");
         
-        // Stop existing tracks if any and notify server
+        // Save old track name before stopping
+        let oldTrackName = null;
         if (localStream) {
           const oldVideoTrack = localStream.getVideoTracks()[0];
           if (oldVideoTrack) {
-            const oldTrackName = oldVideoTrack.id;
-            console.log("Removing old track:", oldTrackName);
-            
-            // Notify server to remove old track from list
-            try {
-              await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/remove-track\`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Authorization": \`Bearer \${CASTER_TOKEN}\`
-                },
-                body: JSON.stringify({ trackName: oldTrackName })
-              });
-            } catch (e) {
-              console.warn("Failed to remove old track:", e);
-            }
+            oldTrackName = oldVideoTrack.id;
+            console.log("Will remove old track:", oldTrackName);
           }
           
+          // Stop all tracks
           localStream.getTracks().forEach(track => {
             track.stop();
             console.log("Stopped existing track:", track.id);
@@ -236,8 +227,9 @@ function getCastPageHTML(
           const senders = pc.getSenders();
           for (const sender of senders) {
             if (sender.track) {
+              const trackId = sender.track.id;
               pc.removeTrack(sender);
-              console.log("Removed sender for track:", sender.track.id);
+              console.log("Removed sender for track:", trackId);
             }
           }
         }
@@ -247,6 +239,23 @@ function getCastPageHTML(
           video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: true
         });
+        
+        // Now remove old track from server after new stream is obtained
+        if (oldTrackName) {
+          try {
+            await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/remove-track\`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": \`Bearer \${CASTER_TOKEN}\`
+              },
+              body: JSON.stringify({ trackName: oldTrackName })
+            });
+            console.log("Removed old track from server:", oldTrackName);
+          } catch (e) {
+            console.warn("Failed to remove old track:", e);
+          }
+        }
         
         // Show local preview
         const preview = document.getElementById("localPreview");
@@ -342,10 +351,12 @@ function getCastPageHTML(
         
         updateStatus("Casting screen");
         document.getElementById("addScreenBtn").textContent = "Switch screen";
+        document.getElementById("addScreenBtn").disabled = false;
         
       } catch (error) {
         console.error("Error adding screen:", error);
         updateStatus("Error: " + error.message);
+        document.getElementById("addScreenBtn").disabled = false;
       }
     }
 
