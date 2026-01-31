@@ -6,6 +6,11 @@ export interface Env {
   CALLS_APP_SECRET: string;
 }
 
+interface RTCSessionDescriptionInit {
+  type: "offer" | "answer" | "pranswer" | "rollback";
+  sdp: string;
+}
+
 interface SessionData {
   sessionId: string;
   createdAt: number;
@@ -23,7 +28,8 @@ export class CastSession extends DurableObject<Env> {
 
     // Restore session on restart
     this.ctx.blockConcurrencyWhile(async () => {
-      this.sessionData = await this.ctx.storage.get<SessionData>("sessionData");
+      this.sessionData =
+        (await this.ctx.storage.get<SessionData>("sessionData")) ?? null;
     });
   }
 
