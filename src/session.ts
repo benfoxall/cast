@@ -125,8 +125,8 @@ export class CastSession extends DurableObject<Env> {
       });
     }
 
-    // Renegotiate session
-    if (request.method === "POST" && url.pathname.endsWith("/renegotiate")) {
+    // Initialize connection with Calls (send empty offer to establish connection)
+    if (request.method === "POST" && url.pathname.endsWith("/init-connection")) {
       const auth = request.headers.get("Authorization");
       if (
         !this.sessionData ||
@@ -153,7 +153,55 @@ export class CastSession extends DurableObject<Env> {
       );
 
       if (!renegResponse.ok) {
-        return new Response("Failed to renegotiate", { status: 500 });
+        const errorText = await renegResponse.text();
+        console.error("Init connection failed:", errorText);
+        return new Response(`Failed to init connection: ${errorText}`, {
+          status: 500,
+        });
+      }
+
+      return Response.json(await renegResponse.json());
+    }
+
+    // Renegotiate session
+    if (request.method === "POST" && url.pathname.endsWith("/renegotiate")) {
+      const auth = request.headers.get("Authorization");
+      if (
+        !this.sessionData ||
+        auth !== `Bearer ${this.sessionData.casterToken}`
+      ) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      const body = (await request.json()) as {
+        callsSessionId: string;
+        sessionDescription?: RTCSessionDescriptionInit;
+      };
+
+      // If no sessionDescription, we're requesting an offer from Calls (GET behavior)
+      // If sessionDescription is provided, we're sending our answer
+      const renegBody = body.sessionDescription
+        ? JSON.stringify({ sessionDescription: body.sessionDescription })
+        : JSON.stringify({});
+
+      const renegResponse = await fetch(
+        `https://rtc.live.cloudflare.com/v1/apps/${this.env.CALLS_APP_ID}/sessions/${body.callsSessionId}/renegotiate`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
+            "Content-Type": "application/json",
+          },
+          body: renegBody,
+        },
+      );
+
+      if (!renegResponse.ok) {
+        const errorText = await renegResponse.text();
+        console.error("Renegotiate failed:", errorText);
+        return new Response(`Failed to renegotiate: ${errorText}`, {
+          status: 500,
+        });
       }
 
       return Response.json(await renegResponse.json());
@@ -169,10 +217,39 @@ export class CastSession extends DurableObject<Env> {
         return new Response("Unauthorized", { status: 401 });
       }
 
-      const { callsSessionId, trackName } = (await request.json()) as {
-        callsSessionId: string;
-        trackName: string;
+      const { callsSessionId, trackName, mid, kind, sessionDescription } =
+        (await request.json()) as {
+          callsSessionId: string;
+          trackName: string;
+          mid?: string;
+          kind?: string;
+          sessionDescription?: RTCSessionDescriptionInit;
+        };
+
+      const trackRequestBody: any = {
+        tracks: [
+          {
+            location: "local",
+            trackName: trackName,
+          },
+        ],
       };
+
+      // If we have a sessionDescription, include it (client-generated offer)
+      // Otherwise, let Calls generate the offer
+      if (sessionDescription) {
+        trackRequestBody.sessionDescription = sessionDescription;
+      }
+
+      // If we have a mid, include it
+      if (mid) {
+        trackRequestBody.tracks[0].mid = mid;
+      }
+
+      // If we have a kind, include it
+      if (kind) {
+        trackRequestBody.tracks[0].kind = kind;
+      }
 
       const trackResponse = await fetch(
         `https://rtc.live.cloudflare.com/v1/apps/${this.env.CALLS_APP_ID}/sessions/${callsSessionId}/tracks/new`,
@@ -182,20 +259,19 @@ export class CastSession extends DurableObject<Env> {
             Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            tracks: [
-              {
-                location: "local",
-                trackName: trackName,
-              },
-            ],
-          }),
+          body: JSON.stringify(trackRequestBody),
         },
       );
 
       if (!trackResponse.ok) {
-        return new Response("Failed to add track", { status: 500 });
+        const errorText = await trackResponse.text();
+        console.error("Failed to add track:", errorText);
+        return new Response(`Failed to add track: ${errorText}`, {
+          status: 500,
+        });
       }
+
+      const trackData = await trackResponse.json();
 
       this.sessionData.trackName = trackName;
       await this.ctx.storage.put("sessionData", this.sessionData);
@@ -206,7 +282,7 @@ export class CastSession extends DurableObject<Env> {
         trackName,
       });
 
-      return Response.json({ success: true });
+      return Response.json(trackData);
     }
 
     // Proxy new session request
@@ -217,22 +293,28 @@ export class CastSession extends DurableObject<Env> {
           method: "POST",
           headers: {
             Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
-            "Content-Type": "application/json",
           },
         },
       );
 
       if (!callsResponse.ok) {
-        return new Response("Failed to create new session", { status: 500 });
+        const errorText = await callsResponse.text();
+        console.error("Calls API error:", errorText);
+        return new Response("Failed to create new session: " + errorText, {
+          status: 500,
+        });
       }
 
-      return Response.json(await callsResponse.json());
+      const responseData = await callsResponse.json();
+      console.log("Calls new session response:", responseData);
+      return Response.json(responseData);
     }
 
     // Proxy pull tracks request
     if (request.method === "POST" && url.pathname.endsWith("/pull-tracks")) {
-      const { viewerSessionId } = (await request.json()) as {
+      const { viewerSessionId, trackName } = (await request.json()) as {
         viewerSessionId: string;
+        trackName?: string;
       };
 
       if (!this.sessionData || !this.sessionData.callsSessionId) {
@@ -252,7 +334,7 @@ export class CastSession extends DurableObject<Env> {
               {
                 location: "remote",
                 sessionId: this.sessionData.callsSessionId,
-                trackName: "*",
+                trackName: trackName || "*",
               },
             ],
           }),
@@ -277,27 +359,37 @@ export class CastSession extends DurableObject<Env> {
           sessionDescription?: RTCSessionDescriptionInit;
         };
 
-      const body = sessionDescription
-        ? JSON.stringify({ sessionDescription })
-        : undefined;
+      const fetchOptions: RequestInit = {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
+        },
+      };
+
+      if (sessionDescription) {
+        fetchOptions.headers = {
+          ...fetchOptions.headers,
+          "Content-Type": "application/json",
+        };
+        fetchOptions.body = JSON.stringify({ sessionDescription });
+      }
 
       const renegResponse = await fetch(
         `https://rtc.live.cloudflare.com/v1/apps/${this.env.CALLS_APP_ID}/sessions/${viewerSessionId}/renegotiate`,
-        {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
-            "Content-Type": "application/json",
-          },
-          body,
-        },
+        fetchOptions,
       );
 
       if (!renegResponse.ok) {
-        return new Response("Failed to renegotiate", { status: 500 });
+        const errorText = await renegResponse.text();
+        console.error("Renegotiate error:", errorText);
+        return new Response("Failed to renegotiate: " + errorText, {
+          status: 500,
+        });
       }
 
-      return Response.json(await renegResponse.json());
+      const responseData = await renegResponse.json();
+      console.log("Renegotiate response:", responseData);
+      return Response.json(responseData);
     }
 
     // Get session info (for viewers)
@@ -311,6 +403,66 @@ export class CastSession extends DurableObject<Env> {
         callsSessionId: this.sessionData.callsSessionId,
         trackName: this.sessionData.trackName,
       });
+    }
+
+    // Get Calls session state (for debugging)
+    if (request.method === "GET" && url.pathname.endsWith("/calls-state")) {
+      const auth = request.headers.get("Authorization");
+      if (
+        !this.sessionData ||
+        auth !== `Bearer ${this.sessionData.casterToken}`
+      ) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      if (!this.sessionData.callsSessionId) {
+        return Response.json({ error: "No Calls session" });
+      }
+
+      const stateResponse = await fetch(
+        `https://rtc.live.cloudflare.com/v1/apps/${this.env.CALLS_APP_ID}/sessions/${this.sessionData.callsSessionId}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
+          },
+        },
+      );
+
+      if (!stateResponse.ok) {
+        const errorText = await stateResponse.text();
+        console.error("Failed to get Calls state:", errorText);
+        return new Response(`Failed to get state: ${errorText}`, { status: 500 });
+      }
+
+      const stateData = await stateResponse.json();
+      return Response.json(stateData);
+    }
+
+    // Get viewer Calls session state (for debugging)
+    if (request.method === "POST" && url.pathname.endsWith("/viewer-calls-state")) {
+      const { viewerSessionId } = (await request.json()) as {
+        viewerSessionId: string;
+      };
+
+      const stateResponse = await fetch(
+        `https://rtc.live.cloudflare.com/v1/apps/${this.env.CALLS_APP_ID}/sessions/${viewerSessionId}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.env.CALLS_APP_SECRET}`,
+          },
+        },
+      );
+
+      if (!stateResponse.ok) {
+        const errorText = await stateResponse.text();
+        console.error("Failed to get viewer Calls state:", errorText);
+        return new Response(`Failed to get state: ${errorText}`, { status: 500 });
+      }
+
+      const stateData = await stateResponse.json();
+      return Response.json(stateData);
     }
 
     return new Response("Not Found", { status: 404 });

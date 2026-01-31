@@ -10,10 +10,5 @@
         "script_name": "cast",
       },
     ],
-  },
-  // Add your Cloudflare Calls App ID and Secret here
-  "vars": {
-    "CALLS_APP_ID": "your-app-id-here",
-    "CALLS_APP_SECRET": "your-app-secret-here",
-  },
+  }
 }
