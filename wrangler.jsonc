@@ -13,8 +13,13 @@
       {
         "name": "CAST_SESSION",
         "class_name": "CastSession",
-        "script_name": "cast",
       },
     ],
   },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["CastSession"],
+    },
+  ],
 }
