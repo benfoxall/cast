@@ -206,16 +206,8 @@ function getCastPageHTML(
         
         updateStatus("Requesting screen access...");
         
-        // Save old track name before stopping
-        let oldTrackName = null;
+        // Stop existing tracks if any
         if (localStream) {
-          const oldVideoTrack = localStream.getVideoTracks()[0];
-          if (oldVideoTrack) {
-            oldTrackName = oldVideoTrack.id;
-            console.log("Will remove old track:", oldTrackName);
-          }
-          
-          // Stop all tracks
           localStream.getTracks().forEach(track => {
             track.stop();
             console.log("Stopped existing track:", track.id);
@@ -239,23 +231,6 @@ function getCastPageHTML(
           video: { width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: true
         });
-        
-        // Now remove old track from server after new stream is obtained
-        if (oldTrackName) {
-          try {
-            await fetch(\`\${ORIGIN}/api/\${SESSION_ID}/remove-track\`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": \`Bearer \${CASTER_TOKEN}\`
-              },
-              body: JSON.stringify({ trackName: oldTrackName })
-            });
-            console.log("Removed old track from server:", oldTrackName);
-          } catch (e) {
-            console.warn("Failed to remove old track:", e);
-          }
-        }
         
         // Show local preview
         const preview = document.getElementById("localPreview");
@@ -400,27 +375,17 @@ function getViewPageHTML(sessionId: string, origin: string): string {
       text-align: center;
       z-index: 10;
     }
-    #videos {
+    video {
       width: 100vw;
       height: 100vh;
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 0;
-    }
-    #videos video {
-      width: 100%;
-      height: 100%;
       object-fit: contain;
       background: black;
-    }
-    #videos:has(video:only-child) {
-      grid-template-columns: 1fr;
     }
   </style>
 </head>
 <body>
   <div id="waiting">Waiting for stream...</div>
-  <div id="videos"></div>
+  <video id="remoteVideo" autoplay muted playsinline></video>
 
   <script>
     const SESSION_ID = "${sessionId}";
@@ -429,8 +394,7 @@ function getViewPageHTML(sessionId: string, origin: string): string {
     let pc = null;
     let callsSessionId = null;
     let viewerSessionId = null;
-    const activeTrackNames = new Set();
-    const trackVideoMap = new Map(); // trackName -> video element
+    let currentTrackName = null;
     
     async function checkSession() {
       try {
@@ -445,25 +409,18 @@ function getViewPageHTML(sessionId: string, origin: string): string {
             await initConnection();
           }
           
-          if (data.trackNames && data.trackNames.length > 0) {
-            // Pull any new tracks
-            const newTracks = data.trackNames.filter(tn => !activeTrackNames.has(tn));
-            for (const trackName of newTracks) {
-              await pullTrack(trackName);
-              activeTrackNames.add(trackName);
-            }
-            
-            // Remove tracks that are no longer in the list
-            const removedTracks = Array.from(activeTrackNames).filter(tn => !data.trackNames.includes(tn));
-            for (const trackName of removedTracks) {
-              console.log("Track removed from session:", trackName);
-              activeTrackNames.delete(trackName);
-            }
-            
+          // Check if track changed
+          if (data.currentTrackName && data.currentTrackName !== currentTrackName) {
+            console.log("Track changed from", currentTrackName, "to", data.currentTrackName);
+            currentTrackName = data.currentTrackName;
+            await pullTrack(currentTrackName);
+          }
+          
+          if (currentTrackName) {
             document.getElementById("waiting").style.display = "none";
           }
           
-          // Keep checking for new tracks
+          // Keep checking for track changes
           setTimeout(checkSession, 2000);
         } else {
           setTimeout(checkSession, 2000);
@@ -490,22 +447,11 @@ function getViewPageHTML(sessionId: string, origin: string): string {
         console.log("ICE connection state:", pc.iceConnectionState);
       };
       
-      // Handle incoming tracks - create video element for each
+      // Handle incoming tracks - replace video stream
       pc.ontrack = (event) => {
         console.log("Received track:", event.track.kind, "id:", event.track.id);
         
-        // Create or get video element for this track
-        let video = trackVideoMap.get(event.track.id);
-        if (!video) {
-          video = document.createElement("video");
-          video.autoplay = true;
-          video.muted = true;
-          video.playsinline = true;
-          video.dataset.trackId = event.track.id;
-          document.getElementById("videos").appendChild(video);
-          trackVideoMap.set(event.track.id, video);
-          console.log("Created video element for track:", event.track.id);
-        }
+        const video = document.getElementById("remoteVideo");
         
         // Set stream
         if (event.streams && event.streams[0]) {
@@ -514,16 +460,6 @@ function getViewPageHTML(sessionId: string, origin: string): string {
           const stream = new MediaStream([event.track]);
           video.srcObject = stream;
         }
-        
-        // Handle track ending
-        event.track.onended = () => {
-          console.log("Track ended:", event.track.id);
-          const videoEl = trackVideoMap.get(event.track.id);
-          if (videoEl) {
-            videoEl.remove();
-            trackVideoMap.delete(event.track.id);
-          }
-        };
         
         document.getElementById("waiting").style.display = "none";
       };

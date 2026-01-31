@@ -11,7 +11,7 @@ interface SessionData {
   createdAt: number;
   casterToken?: string;
   callsSessionId?: string;
-  trackNames?: string[];
+  currentTrackName?: string;
 }
 
 export class CastSession extends DurableObject<Env> {
@@ -49,7 +49,7 @@ export class CastSession extends DurableObject<Env> {
             data: {
               sessionId: this.sessionData.sessionId,
               callsSessionId: this.sessionData.callsSessionId,
-              trackNames: this.sessionData.trackNames || [],
+              currentTrackName: this.sessionData.currentTrackName,
             },
           }),
         );
@@ -273,18 +273,13 @@ export class CastSession extends DurableObject<Env> {
 
       const trackData = await trackResponse.json();
 
-      // Add trackName to array
-      if (!this.sessionData.trackNames) {
-        this.sessionData.trackNames = [];
-      }
-      if (!this.sessionData.trackNames.includes(trackName)) {
-        this.sessionData.trackNames.push(trackName);
-      }
+      // Set current track
+      this.sessionData.currentTrackName = trackName;
       await this.ctx.storage.put("sessionData", this.sessionData);
 
       // Broadcast to viewers
       this.broadcast({
-        type: "track-added",
+        type: "track-changed",
         trackName,
       });
 
@@ -398,34 +393,6 @@ export class CastSession extends DurableObject<Env> {
       return Response.json(responseData);
     }
 
-    // Remove track from session
-    if (request.method === "POST" && url.pathname.endsWith("/remove-track")) {
-      const auth = request.headers.get("Authorization");
-      if (
-        !this.sessionData ||
-        auth !== `Bearer ${this.sessionData.casterToken}`
-      ) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-
-      const { trackName } = (await request.json()) as { trackName: string };
-
-      if (this.sessionData.trackNames) {
-        this.sessionData.trackNames = this.sessionData.trackNames.filter(
-          tn => tn !== trackName
-        );
-        await this.ctx.storage.put("sessionData", this.sessionData);
-      }
-
-      // Broadcast to viewers
-      this.broadcast({
-        type: "track-removed",
-        trackName,
-      });
-
-      return Response.json({ success: true });
-    }
-
     // Get session info (for viewers)
     if (request.method === "GET" && url.pathname.endsWith("/info")) {
       if (!this.sessionData || !this.sessionData.callsSessionId) {
@@ -435,7 +402,7 @@ export class CastSession extends DurableObject<Env> {
       return Response.json({
         ready: true,
         callsSessionId: this.sessionData.callsSessionId,
-        trackNames: this.sessionData.trackNames || [],
+        currentTrackName: this.sessionData.currentTrackName,
       });
     }
 
