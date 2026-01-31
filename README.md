@@ -8,7 +8,7 @@ A minimal screen sharing tool for meetings. Share your screen with others via a 
 # Install dependencies
 npm install
 
-# Add your Cloudflare Calls credentials to wrangler.jsonc
+# Add your Cloudflare Calls credentials to .dev.vars
 # See SETUP.md for detailed instructions
 
 # Run locally
