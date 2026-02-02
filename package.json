@@ -1,6 +1,7 @@
 {
     "name": "cast",
     "workspaces": [
-        "packages/worker"
+        "packages/worker",
+        "packages/frontend"
     ]
 }

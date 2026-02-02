@@ -3,6 +3,10 @@
     "version": "0.0.1",
     "private": true,
     "type": "module",
-    "scripts": {},
-    "devDependencies": {}
+    "scripts": {
+        "build": "esbuild src/main.tsx --metafile=dist/meta.json --entry-names=[name]-[hash] --bundle --minify --sourcemap --target=chrome58,firefox57,safari11,edge16 --outdir=dist"
+    },
+    "devDependencies": {
+        "esbuild": "0.27.2"
+    }
 }
