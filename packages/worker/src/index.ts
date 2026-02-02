@@ -39,7 +39,7 @@ export default {
         casterToken: string;
       };
 
-      return new Response(getCastPageHTML(sessionId, url.origin, casterToken), {
+      return new Response(getCastPageHTML(sessionId, casterToken), {
         headers: { "Content-Type": "text/html" },
       });
     }
@@ -47,7 +47,7 @@ export default {
     // View page (-sessionId)
     if (path.match(/^\/\-[a-z0-9]{5}$/)) {
       const sessionId = path.slice(2);
-      return new Response(getViewPageHTML(sessionId, url.origin), {
+      return new Response(getViewPageHTML(sessionId), {
         headers: { "Content-Type": "text/html" },
       });
     }
@@ -71,7 +71,6 @@ export default {
 
 function getCastPageHTML(
   sessionId: string,
-  origin: string,
   casterToken: string,
 ): string {
   return `<!DOCTYPE html>
@@ -129,7 +128,7 @@ function getCastPageHTML(
   <p>share your screen with others</p>
   
   <div class="link" onclick="copyLink()" title="Click to copy">
-    ${origin}/-${sessionId}
+    <span data-origin></span>/-${sessionId}
   </div>
 
   <button id="addScreenBtn" onclick="addScreen()">Add screen</button>
@@ -140,7 +139,7 @@ function getCastPageHTML(
 
   <script>
     const SESSION_ID = "${sessionId}";
-    const ORIGIN = "${origin}";
+    const ORIGIN = window.location.origin;
     const CASTER_TOKEN = "${casterToken}";
     
     let pc = null;
@@ -153,6 +152,10 @@ function getCastPageHTML(
       setTimeout(() => {
         document.querySelector('.link').innerHTML = ORIGIN + "/-" + SESSION_ID;
       }, 1000);
+    }
+
+    for(const el of document.querySelectorAll('[data-origin]')) {
+      el.innerText = ORIGIN
     }
 
     async function initCallsSession() {
@@ -346,7 +349,7 @@ function getCastPageHTML(
 </html>`;
 }
 
-function getViewPageHTML(sessionId: string, origin: string): string {
+function getViewPageHTML(sessionId: string): string {
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -389,7 +392,7 @@ function getViewPageHTML(sessionId: string, origin: string): string {
 
   <script>
     const SESSION_ID = "${sessionId}";
-    const ORIGIN = "${origin}";
+    const ORIGIN = window.location.origin;
     
     let pc = null;
     let callsSessionId = null;

@@ -1,14 +1,6 @@
 {
     "name": "cast",
-    "version": "0.0.1",
-    "private": true,
-    "type": "module",
-    "scripts": {
-        "dev": "wrangler dev",
-        "deploy": "wrangler deploy"
-    },
-    "devDependencies": {
-        "@cloudflare/workers-types": "^4.20260131.0",
-        "wrangler": "^4.61.1"
-    }
+    "workspaces": [
+        "packages/worker"
+    ]
 }
